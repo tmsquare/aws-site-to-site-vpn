@@ -26,7 +26,7 @@ class VpnInfrastructureStack(Stack):
             subnet_configuration=[
                 ec2.SubnetConfiguration(
                     name="cf-subnet",
-                    subnet_type=ec2.SubnetType.PRIVATE,
+                    subnet_type=ec2.SubnetType.PUBLIC,
                     cidr_mask=24
                 )
             ],
