@@ -1,0 +1,29 @@
+aws:
+  account_id: "TO BE FILLED"
+  region: "TO BE FILLED"
+ec2:
+  instance_type: t2.micro
+  volume_size: 8
+output:
+  VpcId: 
+  SubnetId: 
+  CustomerGatewayId: 
+  VPNGatewayId: 
+  VPNConnectionId: 
+  EC2InstanceId: 
+  EC2PublicIP: 
+  EC2PrivateIP: 
+vpc:
+  app_name: VpnInfrastructureStack
+  cidr: 10.0.100.0/24
+vpn:
+  magic_wan_ip: "TO BE FILLED"
+  tunnel1:
+    inside_cidr: 169.254.240.4/30
+    outside_ip: 
+    pre_shared_key: "TO BE FILLED"
+  tunnel2:
+    inside_cidr: 169.254.240.8/30
+    outside_ip: 
+    pre_shared_key: "TO BE FILLED"
+

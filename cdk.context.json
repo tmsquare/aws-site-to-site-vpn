@@ -1,0 +1,11 @@
+{
+  "availability-zones:account=313675500730:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "ami:account=313675500730:filters.image-type.0=machine:filters.name.0=debian-11-amd64-*:filters.state.0=available:owners.0=136693071363:region=us-east-1": "ami-053413bdacb39d8dc"
+}
