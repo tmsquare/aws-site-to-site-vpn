@@ -63,3 +63,11 @@ $ cdk bootstrap
 ```
 $ python3 update_yaml.py
 ```
+
+## 5. Create Two IPsec Tunnels and Two Routes on the Magic WAN Dashboard (automation script in progress...)
+
+ * `Tunnels: ` Log in to the Cloudflar Dashboard -> Magic WAN -> Configuration -> Tunnels -> Create
+ * `Routes: ` Log in to the Cloudflar Dashboard -> Magic WAN -> Configuration -> Routes -> Create
+
+Find the details in the `congig.yaml` file. (`Customer endpoint` value can be found under `outside_ip` value of each tunnel)
+

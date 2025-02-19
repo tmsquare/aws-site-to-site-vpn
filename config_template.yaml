@@ -17,13 +17,38 @@ vpc:
   app_name: VpnInfrastructureStack
   cidr: 10.0.100.0/24
 vpn:
-  magic_wan_ip: "TO BE FILLED"
+  magic_wan_ip: "YOUR_MAGIC_WAN_IP"
   tunnel1:
     inside_cidr: 169.254.240.4/30
     outside_ip: 
-    pre_shared_key: "TO BE FILLED"
+    pre_shared_key: "YOUR_PRESHARED_KEY1"
   tunnel2:
     inside_cidr: 169.254.240.8/30
     outside_ip: 
-    pre_shared_key: "TO BE FILLED"
+    pre_shared_key: "YOUR_PRESHARED_KEY2"
+cloudflare:
+  tunnel1:
+    name: tunnel-aws-vpc-north-virginia-1
+    inside_cidr: 169.254.240.6/30
+    cloudflare_endpoint: "YOUR_MAGIC_WAN_IP"
+    health_check_type: Request
+    replay_protection: enabled
+    pre_shared_key: "YOUR_PRESHARED_KEY1"
+    route1:
+      name: route-aws-vpc-north-virginia-1
+      prefix: 10.0.100.0/24
+      priority: 100
+      tunnel: tunnel1
+  tunnel2:
+    name: tunnel-aws-vpc-north-virginia-2
+    inside_cidr: 169.254.240.10/30
+    cloudflare_endpoint: "YOUR_MAGIC_WAN_IP"
+    health_check_type: Request
+    replay_protection: enabled
+    pre_shared_key: "YOUR_PRESHARED_KEY2"
+    route2:
+      name: route-aws-vpc-north-virginia-2
+      prefix: 10.0.100.0/24
+      priority: 100
+      tunnel: tunnel2
 
