@@ -36,3 +36,6 @@ cdk.out
 
 config.yaml
 __init__.py
+
+gcp_config.yaml
+credentials.json

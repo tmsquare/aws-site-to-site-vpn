@@ -1,0 +1,27 @@
+# config.yaml
+project:
+  id: "your-project-id"
+  credentials_file: "path/to/your/credentials.json"
+
+network:
+  vpc_name: "custom-vpc"
+  region: "europe-west1"
+  zone: "europe-west1-b"
+  subnet:
+    name: "eu-gcp-subnet"
+    cidr_range: "10.0.0.0/24"
+
+instances:
+  machine_type: "e2-micro"
+  image: "projects/debian-cloud/global/images/debian-11-bullseye-v20240110"
+  vms:
+    - name: "tunnel"
+      type: "tunnel"
+    - name: "gcp-web-server1"
+      type: "web"
+    - name: "gcp-web-server2"
+      type: "web"
+
+# This section will be populated with output variables
+output:
+  instance_ips: {}
