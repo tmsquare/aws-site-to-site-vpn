@@ -2,7 +2,7 @@
 # Welcome to your AWS Site-to-Site-VPN Python project!
 
 This project helps you to deploy the following environment on AWS (for your Magic WAN quick demos).
-![MAGIC WAN](architecture.jpeg)
+![MAGIC WAN](architecture_aws.jpeg)
 
 ## 1. Define the configurations
 Create a copy of the configuration file
