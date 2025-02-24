@@ -7,9 +7,10 @@ network:
   vpc_name: "custom-vpc"
   region: "europe-west1"
   zone: "europe-west1-b"
+  warp_cidr: 100.96.0.0/12
   subnet:
     name: "eu-gcp-subnet"
-    cidr_range: "10.0.0.0/24"
+    cidr_range: "172.16.0.0/24 "
 
 instances:
   machine_type: "e2-micro"

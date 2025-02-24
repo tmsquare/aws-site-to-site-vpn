@@ -28,6 +28,67 @@ class GCPInfraManager:
         self.subnet_client = compute_v1.SubnetworksClient(credentials=self.credentials)
         self.firewall_client = compute_v1.FirewallsClient(credentials=self.credentials)
         self.instance_client = compute_v1.InstancesClient(credentials=self.credentials)
+        self.router_client = compute_v1.RoutersClient(credentials=self.credentials)
+        self.route_client = compute_v1.RoutesClient(credentials=self.credentials)
+
+    def create_cloud_router(self): # Equivalent of the AWS Virtual Private Gateway
+        project = self.config['project']['id']
+        region = self.config['network']['region']
+        router_name = f"{self.config['network']['vpc_name']}-router"
+        
+        router_config = compute_v1.Router()
+        router_config.name = router_name
+        router_config.network = f"projects/{project}/global/networks/{self.config['network']['vpc_name']}"
+        
+        # Configure NAT: Like the AWS Route Table
+        nat = compute_v1.RouterNat()
+        nat.name = f"{self.config['network']['vpc_name']}-nat"
+        nat.nat_ip_allocate_option = "AUTO_ONLY"
+        nat.source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+        
+        router_config.nats = [nat]
+        
+        try:
+            if not self.resource_exists(self.router_client, 'get',
+                                    project=project,
+                                    region=region,
+                                    router=router_name):
+                operation = self.router_client.insert(
+                    project=project,
+                    region=region,
+                    router_resource=router_config
+                )
+                operation.result()
+                print(f"Cloud Router and NAT created successfully")
+            else:
+                print(f"Cloud Router already exists, skipping creation")
+                
+            return router_name
+        except Exception as e:
+            print(f"Error creating Cloud Router and NAT: {str(e)}")
+            raise
+
+    def create_custom_routes(self):
+        """Create custom routes for Cloudflare WARP traffic"""
+        project = self.config['project']['id']
+        next_hop_instance = str(f"projects/{self.config['project']['id']}/zones/{self.config['network']['zone']}/instances/tunnel")
+        
+        route = compute_v1.Route()
+        route.name = "warp-return-route"
+        route.network = f"projects/{project}/global/networks/{self.config['network']['vpc_name']}"
+        route.dest_range = f"{self.config['network']['warp_cidr']}"  # WARP IP range
+        route.next_hop_instance = next_hop_instance
+        route.priority = 800
+        
+        try:
+            operation = self.route_client.insert(
+                project=project,
+                route_resource=route
+            )
+            operation.result()
+            print(f"Created custom route for WARP traffic")
+        except Exception as e:
+            print(f"Error creating custom route: {str(e)}")
 
     def resource_exists(self, client, method, **kwargs):
         try:
@@ -49,11 +110,12 @@ class GCPInfraManager:
             print(f"VPC {vpc_name} already exists, skipping creation")
             return
 
-        network = {
-            "name": vpc_name,
-            "auto_create_subnetworks": False,
-        }
-        
+        network = compute_v1.Network()
+        network.name = vpc_name
+        network.auto_create_subnetworks = False
+        network.routing_config = compute_v1.NetworkRoutingConfig()
+        network.routing_config.routing_mode = "GLOBAL"
+            
         try:
             operation = self.vpc_client.insert(
                 project=project,
@@ -61,6 +123,9 @@ class GCPInfraManager:
             )
             operation.result()
             print(f"VPC {vpc_name} created successfully")
+
+            # Create Cloud Router with NAT after VPC
+            self.create_cloud_router()
         except Exception as e:
             print(f"Error creating VPC: {str(e)}")
             raise
@@ -115,6 +180,16 @@ class GCPInfraManager:
                 ],
                 "target_tags": ["web-server"],
                 "source_ranges": ["0.0.0.0/0"]
+            },
+            {
+                "name": "allow-internal",
+                "network": f"projects/{project}/global/networks/{self.config['network']['vpc_name']}",
+                "allowed": [
+                    {"I_p_protocol": "tcp"},
+                    {"I_p_protocol": "udp"},
+                    {"I_p_protocol": "icmp"}
+                ],
+                "source_ranges": ["172.16.0.0/24"]  # Allow all internal traffic within subnet
             }
         ]
         
@@ -139,6 +214,13 @@ class GCPInfraManager:
         project = self.config['project']['id']
         zone = self.config['network']['zone']
         instance_ips = {}
+        tunnel_startup_script = f"""#!/bin/bash
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+        sysctl -w net.ipv4.ip_forward=1
+        iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+        apt update -y && apt install -y iptables-persistent
+        netfilter-persistent save
+        """
         
         for vm in self.config['instances']['vms']:
             if self.resource_exists(self.instance_client, 'get',
@@ -146,7 +228,6 @@ class GCPInfraManager:
                                   zone=zone,
                                   instance=vm['name']):
                 print(f"Instance {vm['name']} already exists, skipping creation")
-                # Get IP of existing instance
                 instance = self.instance_client.get(
                     project=project,
                     zone=zone,
@@ -155,13 +236,23 @@ class GCPInfraManager:
                 instance_ips[vm['name']] = instance.network_interfaces[0].network_i_p
                 continue
 
+            # Modified network interface configuration to include external IP
+            network_interface = {
+                "network": f"projects/{project}/global/networks/{self.config['network']['vpc_name']}",
+                "subnetwork": f"projects/{project}/regions/{self.config['network']['region']}/subnetworks/{self.config['network']['subnet']['name']}",
+                # Add access config to get external IP
+                "access_configs": [
+                    {
+                        "name": "External NAT",
+                        "type": "ONE_TO_ONE_NAT"
+                    }
+                ]
+            }
+
             instance_config = {
                 "name": vm['name'],
                 "machine_type": f"zones/{zone}/machineTypes/{self.config['instances']['machine_type']}",
-                "network_interfaces": [{
-                    "network": f"projects/{project}/global/networks/{self.config['network']['vpc_name']}",
-                    "subnetwork": f"projects/{project}/regions/{self.config['network']['region']}/subnetworks/{self.config['network']['subnet']['name']}"
-                }],
+                "network_interfaces": [network_interface],
                 "disks": [{
                     "boot": True,
                     "auto_delete": True,
@@ -173,76 +264,204 @@ class GCPInfraManager:
                     "items": ["tunnel" if vm['type'] == "tunnel" else "web-server"]
                 }
             }
+            tunnel_instance_config = {
+                "name": vm['name'],
+                "can_ip_forward": True,  # ✅ Enables IP forwarding
+                "machine_type": f"zones/{zone}/machineTypes/{self.config['instances']['machine_type']}",
+                "network_interfaces": [network_interface],
+                "disks": [{
+                    "boot": True,
+                    "auto_delete": True,
+                    "initialize_params": {
+                        "source_image": self.config['instances']['image']
+                    }
+                }],
+                "tags": {
+                    "items": ["tunnel" if vm['type'] == "tunnel" else "web-server"]
+                },
+                #"metadata": {
+                #    "items": [
+                #       {
+                #            "key": "startup_script", 
+                #            "value": tunnel_startup_script
+                #        }
+                #    ]
+                #}
+            }
             
             try:
-                operation = self.instance_client.insert(
-                    project=project,
-                    zone=zone,
-                    instance_resource=instance_config
-                )
+                if vm['type'] == "tunnel":
+                    operation = self.instance_client.insert(
+                        project=project,
+                        zone=zone,
+                        instance_resource=tunnel_instance_config
+                    )
+                else:
+                    operation = self.instance_client.insert(
+                        project=project,
+                        zone=zone,
+                        instance_resource=instance_config
+                    )     
                 operation.result()
                 print(f"Instance {vm['name']} created successfully")
                 
-                # Get instance IP
+                # Get instance details including both internal and external IPs
                 instance = self.instance_client.get(
                     project=project,
                     zone=zone,
                     instance=vm['name']
                 )
-                instance_ips[vm['name']] = instance.network_interfaces[0].network_i_p
+                instance_ips[vm['name']] = {
+                    'internal_ip': instance.network_interfaces[0].network_i_p
+                }
+                print(f"Instance {vm['name']} IP - Internal: {instance_ips[vm['name']]['internal_ip']}")
             except Exception as e:
                 print(f"Error creating instance {vm['name']}: {str(e)}")
         
-        # Update config file with IPs if we have any
+        # Update config file with IPs
         if instance_ips:
-            self.config['output']['instance_ips'].update(instance_ips)
+            self.config['output']['instance_ips'] = instance_ips
             with open(self.config_file, 'w') as file:
                 yaml.dump(self.config, file)
             print("Updated configuration file with instance IPs")
 
     def destroy_environment(self):
-        # Delete instances
+        project = self.config['project']['id']
+        region = self.config['network']['region']
+        zone = self.config['network']['zone']
+        vpc_name = self.config['network']['vpc_name']
+        router_name = f"{self.config['network']['vpc_name']}-router"
+        route_name = "warp-return-route"
+
+        # Keep track of operations to wait for
+        operations = []
+
+        print("Starting environment destruction...")
+
+        # 1. Delete instances first
+        print("Deleting instances...")
         for vm in self.config['instances']['vms']:
             try:
-                operation = self.instance_client.delete(
-                    project=self.config['project']['id'],
-                    zone=self.config['network']['zone'],
-                    instance=vm['name']
-                )
-                operation.result()
+                if self.resource_exists(self.instance_client, 'get',
+                                    project=project,
+                                    zone=zone,
+                                    instance=vm['name']):
+                    operation = self.instance_client.delete(
+                        project=project,
+                        zone=zone,
+                        instance=vm['name']
+                    )
+                    operations.append(('instance', operation))
+                    print(f"Deletion initiated for instance {vm['name']}")
             except Exception as e:
                 print(f"Error deleting instance {vm['name']}: {str(e)}")
 
-        # Delete firewall rules
-        rules = ["allow-ssh-tunnel", "allow-web-traffic"]
-        for rule in rules:
+        # Wait for all instance deletions to complete
+        for res_type, operation in operations:
             try:
-                operation = self.firewall_client.delete(
-                    project=self.config['project']['id'],
-                    firewall=rule
+                operation.result()
+            except Exception as e:
+                print(f"Error waiting for {res_type} deletion: {str(e)}")
+        operations.clear()
+
+        # 2.1 Delete Router
+        print("Deleting Cloud Router...")
+        try:
+            if self.resource_exists(self.router_client, 'get',
+                                project=project,
+                                region=region,
+                                router=router_name):
+                operation = self.router_client.delete(
+                    project=project,
+                    region=region,
+                    router=router_name
                 )
                 operation.result()
+                print("Cloud Router deleted successfully")
+        except Exception as e:
+            print(f"Error deleting Cloud Router: {str(e)}")
+
+        # 2.2 Delete NAT (Route)
+        print("Deleting WARP Route...")
+        try:
+            if self.resource_exists(self.route_client, 'get',
+                                project=project,
+                                route=route_name):
+                operation = self.route_client.delete(
+                    project=project,
+                    route=route_name
+                )
+                operation.result()
+                print("WARP Route deleted successfully")
+        except Exception as e:
+            print(f"Error deleting WARP Route: {str(e)}")
+
+        # 3. Delete firewall rules
+        print("Deleting firewall rules...")
+        firewall_rules = ["allow-ssh-tunnel", "allow-web-traffic", "allow-internal"]
+        for rule in firewall_rules:
+            try:
+                if self.resource_exists(self.firewall_client, 'get',
+                                    project=project,
+                                    firewall=rule):
+                    operation = self.firewall_client.delete(
+                        project=project,
+                        firewall=rule
+                    )
+                    operations.append(('firewall', operation))
+                    print(f"Deletion initiated for firewall rule {rule}")
             except Exception as e:
                 print(f"Error deleting firewall rule {rule}: {str(e)}")
 
-        # Delete subnet
+        # Wait for all firewall deletions to complete
+        for res_type, operation in operations:
+            try:
+                operation.result()
+            except Exception as e:
+                print(f"Error waiting for {res_type} deletion: {str(e)}")
+        operations.clear()
+
+        # 4. Delete subnet
+        print("Deleting subnet...")
         try:
-            operation = self.subnet_client.delete(
-                project=self.config['project']['id'],
-                region=self.config['network']['region'],
-                subnetwork=self.config['network']['subnet']['name']
-            )
-            operation.result()
+            if self.resource_exists(self.subnet_client, 'get',
+                                project=project,
+                                region=region,
+                                subnetwork=self.config['network']['subnet']['name']):
+                operation = self.subnet_client.delete(
+                    project=project,
+                    region=region,
+                    subnetwork=self.config['network']['subnet']['name']
+                )
+                operation.result()
+                print(f"Subnet {self.config['network']['subnet']['name']} deleted")
         except Exception as e:
             print(f"Error deleting subnet: {str(e)}")
 
-        # Delete VPC
+        # 5. Delete VPC (only after all other resources are deleted)
+        print("Deleting VPC...")
         try:
-            operation = self.vpc_client.delete(
-                project=self.config['project']['id'],
-                network=self.config['network']['vpc_name']
-            )
-            operation.result()
+            if self.resource_exists(self.vpc_client, 'get',
+                                project=project,
+                                network=vpc_name):
+                # Check for any remaining firewall rules
+                remaining_firewalls = self.firewall_client.list(project=project)
+                for firewall in remaining_firewalls:
+                    if vpc_name in firewall.network:
+                        print(f"Deleting remaining firewall rule: {firewall.name}")
+                        operation = self.firewall_client.delete(
+                            project=project,
+                            firewall=firewall.name
+                        )
+                        operation.result()
+
+                # Now try to delete the VPC
+                operation = self.vpc_client.delete(
+                    project=project,
+                    network=vpc_name
+                )
+                operation.result()
+                print(f"VPC {vpc_name} deleted")
         except Exception as e:
             print(f"Error deleting VPC: {str(e)}")
 
@@ -250,6 +469,8 @@ class GCPInfraManager:
         self.config['output']['instance_ips'] = {}
         with open(self.config_file, 'w') as file:
             yaml.dump(self.config, file)
+        
+        print("Environment destruction completed!")
 
 
 def main():
@@ -267,6 +488,7 @@ def main():
             manager.create_subnet()
             manager.create_firewall_rules()
             manager.create_instances()
+            manager.create_custom_routes()
             print("\nEnvironment setup completed!")
             print("Check config.yaml for instance IPs")
         except Exception as e:
